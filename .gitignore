@@ -1,0 +1,11 @@
+node_modules/
+.next/
+data/
+test-results/
+*.log
+*.tsbuildinfo
+.env*
+!.env.example
+
+# Local diagnostic screenshots may contain account information
+docs/screenshots/
