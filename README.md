@@ -1,6 +1,6 @@
 # GEO 精准获客平台
 
-基于 Next.js、TypeScript、Node.js 24 原生 SQLite 和 Playwright 的本机内容工作台。五个主菜单：工作台、企业资料、我的文章、发布账号、设置。
+面向 GEO 内容运营的 AI 工作台，支持企业知识库、智能选题、文章生成、富文本编辑及六大平台辅助发布。基于 Next.js、TypeScript、SQLite 和 Playwright 构建。
 
 ## 启动
 
