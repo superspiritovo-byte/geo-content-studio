@@ -1,3 +1,4 @@
+import { formatInstruction, structuredResult } from '@/lib/content-format';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -65,11 +66,12 @@ export async function POST(req:NextRequest,ctx:RouteContext){
     }
     if(action==='topics/favorite'){const {id}=z.object({id:key}).parse(input);const t=db().get<Topic>('topics',id);if(!t)throw Error('选题不存在');return NextResponse.json(db().put('topics',{...t,favorite:!t.favorite}));}
     if(action==='articles/generate'){
-      const v=z.object({knowledgeId:key.optional(),title:text.max(300),audience:text.max(200),purpose:text.max(200),requirements:z.string().max(5000).optional()}).parse(input);const s=db().settings();
-      const result=articleSchema.parse(awaitModel(await completion(db(),writingSystem,`${buildContext(db(),v.knowledgeId)}\n题目：${v.title}\n读者：${v.audience}\n目的：${v.purpose}\n长度约 ${s.length} 字，语气：${s.tone}\n额外要求：${v.requirements||'无'}\n返回 {"title":"标题","body":"Markdown 正文，不重复一级标题，不包含图片","checks":["需人工核对的信息"]}。`)));
+      const v=z.object({knowledgeId:key.optional(),title:text.max(300),audience:text.max(200),purpose:text.max(200),requirements:z.string().max(5000).optional(),contentFormat:z.enum(['long','faq','qa','cards']).default('long'),itemCount:z.number().int().min(1).max(8).optional()}).parse(input);const s=db().settings();
+      const count=v.itemCount??(v.contentFormat==='faq'?5:3);
+      const result=structuredResult(v.contentFormat,awaitModel(await completion(db(),writingSystem,`${buildContext(db(),v.knowledgeId)}\n题目：${v.title}\n读者：${v.audience}\n目的：${v.purpose}\n长度约 ${s.length} 字，语气：${s.tone}\n额外要求：${v.requirements||'无'}\n${formatInstruction(v.contentFormat,count)}`)),count);
       return NextResponse.json(db().saveArticle({...v,...result}));
     }
-    if(action==='articles/save'){const v=z.object({id:key.optional(),knowledgeId:key.optional(),title:text.max(300),body:text.max(500000),audience:z.string().max(200),purpose:z.string().max(200),checks:z.array(z.string()).max(30)}).parse(input);return NextResponse.json(db().saveArticle(v));}
+    if(action==='articles/save'){const v=z.object({id:key.optional(),knowledgeId:key.optional(),title:text.max(300),body:text.max(500000),contentFormat:z.enum(['long','faq','qa','cards']).optional(),audience:z.string().max(200),purpose:z.string().max(200),checks:z.array(z.string()).max(30)}).parse(input);return NextResponse.json(db().saveArticle(v));}
     if(action==='articles/delete'){const {id}=z.object({id:key}).parse(input);if(db().tasks().some(t=>t.articleId===id))throw Error('文章已有发布记录，请保留以便核对历史');db().remove('articles',id);return NextResponse.json({ok:true});}
     if(action==='accounts/add'){const {platform}=z.object({platform:z.enum(['zhihu','baijiahao','sohu','xiaohongshu','douyin','bilibili'])}).parse(input);return NextResponse.json(db().createAccount(platform as Platform));}
     if(action==='accounts/confirm'){const {id}=z.object({id:key}).parse(input);const a=db().get<Account>('accounts',id);if(!a?.observedIdentity||!a.observedName||a.status!=='observed')throw Error('请先在平台登录，并读取到可验证的账号身份');return NextResponse.json(db().confirmAccount(id,a.observedName,a.observedIdentity));}

@@ -10,7 +10,7 @@ export const platforms: Record<Platform, {name:string; home:string; editor:strin
 export type Knowledge = {id:string; name:string; text:string; updatedAt:string};
 export type Document = {id:string; knowledgeId:string; name:string; status:'ready'|'failed'; text:string; error:string; path?:string};
 export type Topic = {id:string;knowledgeId:string;title:string;audience:string;purpose:string;reason:string;checks:string[];favorite:boolean};
-export type Article = {id:string;revision:string;knowledgeId?:string;title:string;body:string;audience:string;purpose:string;checks:string[];updatedAt:string};
+export type Article = {contentFormat?:import("./content-format").ContentFormat;id:string;revision:string;knowledgeId?:string;title:string;body:string;audience:string;purpose:string;checks:string[];updatedAt:string};
 export type Account = {id:string;platform:Platform;name:string;identity:string;status:'new'|'observed'|'ready'|'expired';observedName?:string;observedIdentity?:string;message:string;publishable?:boolean};
 export type TaskStatus = 'queued'|'publishing'|'submitted'|'published'|'needs_action'|'failed'|'handled';
 export type Task = {id:string;batchId:string;articleId:string;accountId:string;platform:Platform;accountName:string;identity:string;snapshot:Article;cover?:string;images?:string[];postTitle?:string;postBody?:string;status:TaskStatus;stage:string;message:string;updatedAt:string;publicUrl?:string;submissionAttempt:boolean;manualPublicationClaim?:boolean;fingerprint:string};

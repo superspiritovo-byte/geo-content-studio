@@ -62,3 +62,41 @@ test('连接测试接受有效的推理预算耗尽响应，但文章生成仍�
   }finally{store().saveSettings(old);await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
 after(()=>store().close());
+
+
+
+test('结构化生成校验实际模型响应，保存编辑后的格式元数据',async()=>{
+  const server=createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;
+    const prompt=JSON.parse(raw).messages.at(-1).content;
+    assert.match(prompt,/生成 2 组问答/);
+    res.setHeader('Content-Type','application/json');
+    res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({title:'FAQ',items:[{question:'问题一',answer:'答案一'},{question:'问题二',answer:'答案二'}],checks:['核对事实']})}}]}));
+  });
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const old=store().settings();
+  try{
+    store().saveSettings({...old,baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`});
+    const generated=await post('articles/generate',{title:'售后',audience:'客户',purpose:'解答',contentFormat:'faq',itemCount:2});
+    assert.equal(generated.status,200);
+    assert.equal(generated.value.contentFormat,'faq');
+    assert.match(generated.value.body,/## 问题二/);
+    const saved=await post('articles/save',{...generated.value,body:'人工修改的正文'});
+    assert.equal(saved.status,200);
+    assert.equal(saved.value.contentFormat,'faq');
+    assert.equal(saved.value.body,'人工修改的正文');
+  }finally{store().saveSettings(old);await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+
+
+test('回退后监测和自动运营接口关闭，保留数据库中的历史记录',async()=>{
+  store().db.exec("CREATE TABLE IF NOT EXISTS monitor (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
+  store().db.prepare("INSERT INTO monitor(id,data) VALUES(?,?)").run('rollback-retained',JSON.stringify({id:'rollback-retained',brand:'历史数据'}));
+  assert.equal((await post('monitor/save',{})).status,404);
+  assert.equal((await post('autopilot/config',{})).status,404);
+  const current=await state();
+  assert.equal('monitor' in current,false);
+  assert.equal('autoRuns' in current,false);
+  assert.ok(store().db.prepare("SELECT id FROM monitor WHERE id=?").get('rollback-retained'));
+});

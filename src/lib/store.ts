@@ -32,7 +32,7 @@ export class Store {
   tasks(){return this.all<Task>('tasks');}
   createKnowledge(name:string,text:string){return this.put('knowledge',{id:id(),name,text,updatedAt:now()});}
   addDocument(knowledgeId:string,name:string,status:Document['status'],text:string,error='',path?:string){return this.put<Document>('documents',{id:id(),knowledgeId,name,status,text,error,path});}
-  saveArticle(input:Partial<Article>&Pick<Article,'title'|'body'|'audience'|'purpose'|'checks'>){return this.put<Article>('articles',{...input,id:input.id||id(),revision:id(),updatedAt:now()});}
+  saveArticle(input:Partial<Article>&Pick<Article,'title'|'body'|'audience'|'purpose'|'checks'>){return this.put<Article>('articles',{...(input.id?this.get<Article>('articles',input.id):{}),...input,id:input.id||id(),revision:id(),updatedAt:now()});}
   createAccount(platform:Platform){return this.put<Account>('accounts',{id:id(),platform,name:'待登录账号',identity:'',status:'new',message:'打开平台窗口后完成登录，再读取账号身份。'});}
   confirmAccount(key:string,name:string,identity:string){return this.transaction(()=>{const a=this.get<Account>('accounts',key);if(!a)throw Error('账号不存在');const canonical=normalizeIdentity(identity);if(this.accounts().some(b=>b.id!==key&&b.platform===a.platform&&b.identity&&normalizeIdentity(b.identity)===canonical))throw Error('该平台账号已存在，请使用已保存的账号');return this.put<Account>('accounts',{...a,name,identity:canonical,status:'ready',message:a.publishable===false?'登录身份已确认；平台发布资格尚未确认，请完成平台实名认证或审核后重新读取。':'已确认账号；发布前将重新检查登录身份。'});});}
   createBatch(articleId:string,accountIds:string[],requestId:string,cover?:string,reviewedRevision?:string,imagePost?:{images:string[];title:string;body:string}){

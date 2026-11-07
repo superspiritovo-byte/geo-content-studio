@@ -9,3 +9,5 @@ test-results/
 
 # Local diagnostic screenshots may contain account information
 docs/screenshots/
+
+.next-qa/
