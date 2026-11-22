@@ -1,3 +1,4 @@
+import {resolveDataLocation} from './data-location.mjs';
 import {spawn} from 'node:child_process';
 import {mkdirSync,openSync} from 'node:fs';
 import {join,dirname} from 'node:path';
@@ -8,7 +9,9 @@ const port=Number(process.env.PORT||18080);
 if(!Number.isInteger(port)||port<1024||port>65535)throw Error('PORT must be an integer between 1024 and 65535');
 const check=net.createServer();
 await new Promise((resolve,reject)=>{check.once('error',()=>reject(Error(`Port ${port} is already in use. Close the existing instance or set PORT.`)));check.listen(port,'127.0.0.1',()=>check.close(resolve));});
-const dataDir=process.env.GEO_DATA_DIR||join(process.env.LOCALAPPDATA||root,'GEOStudio','data');
+const location=resolveDataLocation(root);
+const dataDir=location.directory;
+process.env.GEO_DATA_DIR=dataDir;
 mkdirSync(join(dataDir,'logs'),{recursive:true});
 const children=[];let stopping=false;
 function start(name,args){const log=openSync(join(dataDir,'logs',`${name}.log`),'a');const child=spawn(process.execPath,args,{cwd:root,env:{...process.env,NEXT_TELEMETRY_DISABLED:'1'},windowsHide:true,stdio:['ignore',log,log]});children.push(child);child.on('error',e=>{console.error(e.message);stop(1);});child.on('exit',code=>{if(!stopping){console.error(`${name} stopped (${code}). See ${dataDir}/logs/${name}.log`);stop(code||1);}});}

@@ -1,3 +1,4 @@
+import {resolveDataLocation} from '../../scripts/data-location.mjs';
 import {isImagePlatform,validateImagePost} from './image-post';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
@@ -5,16 +6,21 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Account, Article, Command, Document, Knowledge, Platform, Settings, Task, TaskStatus, Topic } from './types';
 import { platforms } from './types';
-import { normalizeIdentity } from './publishing';
-export const dataDir = process.env.GEO_DATA_DIR || join(process.env.LOCALAPPDATA || process.cwd(), 'GEOStudio', 'data');
+import { normalizeIdentity, validatePublicUrl } from './publishing';
+const dataLocation = resolveDataLocation(process.cwd());
+export const dataDir = dataLocation.directory;
 mkdirSync(dataDir,{recursive:true});
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
 type Table = 'knowledge'|'documents'|'topics'|'articles'|'accounts'|'batches'|'tasks'|'commands'|'config';
 export class Store {
   db:DatabaseSync;
-  constructor(path = join(dataDir,'geo.sqlite')) {
+  constructor(path = join(dataDir,'geo.sqlite'), expectedWorkspaceId = path===join(dataDir,'geo.sqlite')?dataLocation.workspaceId:undefined) {
     this.db = new DatabaseSync(path);
+    if(expectedWorkspaceId){
+      const table=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='config'").get();
+      if(!table||this.get<{value:string}>('config','workspace')?.value!==expectedWorkspaceId){this.db.close();throw Error('工作区标识与配置不一致，已停止读取，避免打开错误或空白数据库');}
+    }
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
     for (const table of ['knowledge','documents','topics','articles','accounts','batches','tasks','commands','config']) this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)`);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS task_fingerprint ON tasks(json_extract(data,'$.fingerprint')); CREATE UNIQUE INDEX IF NOT EXISTS batch_request ON batches(json_extract(data,'$.requestId'));");
@@ -57,8 +63,16 @@ export class Store {
   claimTask(){return this.transaction(()=>{const task=this.tasks().reverse().find(t=>t.status==='queued'&&!this.tasks().some(p=>p.accountId===t.accountId&&p.stage==='awaiting_platform_confirmation'&&p.status==='needs_action'));if(!task)return;return this.put<Task>('tasks',{...task,status:'publishing',stage:'preparing',updatedAt:now(),message:'正在核对身份并准备文章'});});}
   setTask(key:string,status:TaskStatus,message:string,extra:Partial<Task>={}){const task=this.get<Task>('tasks',key);if(!task)throw Error('任务不存在');if(status==='published')throw Error('公开发布必须通过身份、内容和公开页面核验');return this.put<Task>('tasks',{...task,...extra,id:task.id,status,message,updatedAt:now()});}
   verifiedTask(key:string,url:string,proof:{identity:string;title:string;bodyMatches:boolean;publiclyAccessible:boolean}){const task=this.get<Task>('tasks',key);if(!task||proof.identity!==task.identity||proof.title!==task.snapshot.title||!proof.bodyMatches||!proof.publiclyAccessible)throw Error('公开文章核验未通过');return this.put<Task>('tasks',{...task,status:'published',publicUrl:url,message:'已核对公开页面、作者、标题和正文',updatedAt:now()});}
+  confirmPublication(key:string,value:string){return this.transaction(()=>{
+    const t=this.get<Task>('tasks',key);if(!t)throw Error('发布任务不存在');
+    if(['queued','publishing'].includes(t.status)||this.all<Command>('commands').some(c=>c.target===key&&['queued','running'].includes(c.status)))throw Error('任务正在处理，请等待当前操作结束再人工确认');
+    const url=validatePublicUrl(t.platform,value);
+    if(t.status==='published')throw Error('该任务已经自动核验通过，无需人工确认');
+    if(t.status==='manually_confirmed'){if(t.publicUrl!==url)throw Error('人工确认链接已保存，不能覆盖历史确认');return t;}
+    const confirmedAt=now();return this.put<Task>('tasks',{...t,status:'manually_confirmed',stage:'manually_confirmed',publicUrl:url,manualPublicationClaim:true,manualConfirmation:{url,confirmedAt,previousStatus:t.status,previousMessage:t.message},message:'用户已核对平台发布状态、账号、标题和正文；人工确认已发布，未经系统自动核验。',updatedAt:confirmedAt});
+  });}
   retryTask(key:string){return this.transaction(()=>{const t=this.get<Task>('tasks',key);if(!t||!['failed','needs_action'].includes(t.status)||t.submissionAttempt||t.manualPublicationClaim)throw Error('该任务可能已提交，只能检查结果，不能重新提交');return this.setTask(key,'queued','已重新排队，提交前将再次检查身份');});}
-  releaseImageTask(key:string){const t=this.get<Task>('tasks',key);if(!t||!isImagePlatform(t.platform)||t.stage!=='awaiting_platform_confirmation'||t.status!=='needs_action')throw Error('没有可释放的图文草稿');return this.setTask(key,'handled','用户已确认在平台处理完毕；此记录不代表自动核验公开发布。',{stage:'platform_handled'});}
+  releaseImageTask(key:string){const t=this.get<Task>('tasks',key);if(!t||t.stage!=='awaiting_platform_confirmation'||t.status!=='needs_action')throw Error('没有可释放的待确认草稿');return this.setTask(key,'handled','用户已确认在平台处理完毕；此记录不代表自动核验公开发布。',{stage:'platform_handled'});}
   recoverInterrupted(){for(const t of this.tasks())if(t.status==='publishing')this.setTask(t.id,'needs_action','助手曾中断，请先检查平台后台；系统不会自动重新发布');for(const c of this.all<Command>('commands'))if(c.status==='running')this.put('commands',{...c,status:'failed',message:'助手曾中断，请重新发起操作'});}
   command(kind:Command['kind'],target:string,url?:string){const pending=this.all<Command>('commands').find(c=>c.kind===kind&&c.target===target&&['queued','running'].includes(c.status));return pending||this.put<Command>('commands',{id:id(),kind,target,url,status:'queued',message:'等待助手'});}
   claimCommand(){return this.transaction(()=>{const c=this.all<Command>('commands').reverse().find(c=>c.status==='queued');return c?this.put<Command>('commands',{...c,status:'running',message:'执行中'}):undefined;});}

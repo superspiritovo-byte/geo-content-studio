@@ -110,3 +110,34 @@
 - 浏览器检查使用当前环境允许的工具；工具拒绝访问时不绕过，也不把失败的操作报告为成功。
 - 仅文档修改可不启动服务或运行业务测试，但应检查路径、命令与实际代码一致。
 - 交付简述具体修改、实际执行的检查及未验证环节。遇到平台限制应说明证据，不反复要求已登录用户重新登录来掩盖适配器缺陷。
+
+## 本机 RAG（2026-11-11）
+
+- src/lib/rag.ts：本机 Ollama、分段、哈希/模型指纹索引、余弦检索、带引用问答。rag_indexes 独立表，仅增不改旧表。配置在 config/rag；模型默认 embeddinggemma 与 qwen3:1.7b。
+- src/lib/rag-writing.ts 固定单次请求的本机/在线路由，避免设置更改使检索资料意外发送在线。启用本机模式后，选题/文章/问答都只能调用环回 Ollama；失败不能云端回退。原在线配置保留。
+- 企业资料页下方 RagPanel 提供本机配置、建索引、查询与片段查看。索引依赖成功解析的当前企业资料；资料/模型改变需重建。问答期间修改资料须拒绝旧答案；文章来源保留为生成时快照，编辑后需重新核对。
+- 本机 Ollama 用户配置禁用 cloud；仅允许 http loopback、拒绝重定向及 cloud 型号。模型下载需要网络，资料处理不需要外部服务。
+- tests/rag-real-smoke.ts 是显式运行的真实本机模型验证，所有样例及 SQLite 在临时目录，不应给日常工作区添加演示企业。npm test 中模型 HTTP 由本机模拟服务器提供，不能冒充真实模型验收。
+
+## 人工发布确认（2026-11-12）
+
+- tasks/confirm-publication 需要明确 confirmed:true、该平台合法公开链接，禁止处理 queued/publishing 或未完成助手命令。
+- manually_confirmed 是用户自行核对的独立状态，不能冒充 published 自动核验通过。保留确认时间、链接、确认前状态与消息及原始文章快照。
+- 人工确认不触发发布；重复确认幂等，禁止覆盖确认链接或重新准备任务，自动检查不能覆盖人工记录。
+
+## 日常 Chrome 扩展连接（2026-11-12）
+
+- 默认 browserMode 为 extension；离线时暂停并引导配对，不回退独立 Chrome。旧 isolated 模式由用户显式选择，旧会话数据保留。
+- chrome-extension/ 是 MV3 扩展；设置页将文件写入 data/chrome-extension 供用户加载。用户须在 chrome://extensions 手动加载并在弹窗配对；不能声称已替用户安装。
+- browser-bridge.ts 保存一次性配对码散列和扩展 token 散列；绑定 chrome-extension Origin。API browser/extension/* 独立处理扩展来源、CORS 与授权。网页常规接口仍须本机同源。
+- browser_jobs 领取一次，超时或助手重启作废；回执不重放。心跳独立每15秒，不领取新任务。图片仅对正在执行且未过期的所属任务授权。
+- worker 的扩展模式只发送 login/identity/prepare，不发送脚本或任意URL；当前身份必须匹配保存身份。扩展仅在现有窗口创建标签，不创建浏览器窗口，不读取日常 Chrome 登录文件或导出凭据。
+- 扩展准备前保护已有文字与图片草稿；支持同源 iframe 正文，跨域或控件不明确暂停。准备阶段保留账号占用及 manualPublicationClaim，所有平台最终在平台人工提交；不冒充自动发布。
+- tests/chrome-extension-smoke.mjs 是显式的真实扩展 + 虚拟HTTPS平台验证，不包含真实平台发布。测试临时浏览器不接触用户日常Chrome。
+
+## 固定工作区与启动校验（2026-11-12）
+
+- 当前日常数据在 `%USERPROFILE%\GEOStudio\data`（不在 OneDrive）。项目的 gitignored `local-data.json` 固定 directory 和 workspaceId；不要删除或重建这个文件。原 AppData 数据和迁移前备份保留。
+- scripts/data-location.mjs 供 Store 和 launch.mjs 共用；GEO_DATA_DIR 仍允许测试使用独立临时目录。配置目录的 SQLite 不存在必须停止，不能新建空白日常库。
+- Store 打开配置工作区前核对 config/workspace；API state.storage 返回目录和标识。start.ps1 校验已运行服务标识，不接受其他空工作区作为启动成功。
+- 数据恢复与迁移必须先备份、逐表及记录 ID 核对；不要打印密钥，不把 local-data.json、数据库或会话提交Git。

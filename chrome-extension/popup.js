@@ -1,0 +1,4 @@
+const status=document.getElementById('status');
+async function refresh(){const {token,error,lastContact}=await chrome.storage.local.get(['token','error','lastContact']);status.textContent=!token?'尚未配对':error?error:Date.now()-(lastContact||0)<45000?'已连接本机工作台':'已配对，等待本机工作台启动';}
+document.getElementById('pair').onclick=async()=>{const code=document.getElementById('code').value.trim();if(!/^[a-f0-9]{32}$/.test(code)){status.textContent='请粘贴工作台生成的完整配对码';return;}status.textContent='正在连接…';try{const r=await chrome.runtime.sendMessage({kind:'pair',code});if(r.error)throw Error(r.error);document.getElementById('code').value='';await refresh();}catch(e){status.textContent=e.message;}};
+document.getElementById('disconnect').onclick=async()=>{await chrome.runtime.sendMessage({kind:'disconnect'});await refresh();};chrome.runtime.sendMessage({kind:'wake'});refresh();setInterval(refresh,3000);

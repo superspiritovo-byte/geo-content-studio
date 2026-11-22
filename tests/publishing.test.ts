@@ -32,3 +32,11 @@ test('署名区作者必须唯一匹配，正文或评论中的链接不作证�
   assert.equal(bylineMatches(target,[target,'https://www.zhihu.com/people/other']),false);
   assert.equal(bylineMatches(target,[target,target+'?utm_source=foo']),true);
 });
+test('百家号百度分享链接校验文章标识，预览链接需先核对候选地址',async()=>{
+ const {baiduPublicCandidate}=await import('../src/lib/publishing');
+ const url=new URL('https://mbd.baidu.com/newspage/data/landingshare');url.searchParams.set('context',JSON.stringify({nid:'news_10039597693489046961',sourceFrom:'bjh'}));
+ assert.equal(validatePublicUrl('baijiahao',url.toString()),url.toString());assert.equal(validatePublicUrl('baijiahao',url.toString().replace('landingshare','landingsuper')),url.toString().replace('landingshare','landingsuper'));url.searchParams.set('preview','1');assert.throws(()=>validatePublicUrl('baijiahao',url.toString()),/预览/);
+ const candidate=baiduPublicCandidate('baijiahao',url.toString());assert.ok(candidate);assert.equal(new URL(candidate).searchParams.has('preview'),false);assert.equal(validatePublicUrl('baijiahao',candidate),candidate);assert.equal(baiduPublicCandidate('douyin',url.toString()),undefined);
+ for(const context of [{nid:'news_bad',sourceFrom:'bjh'},{nid:'news_123456',sourceFrom:'other'},['news_123456']]){const bad=new URL(url);bad.searchParams.set('context',JSON.stringify(context));assert.throws(()=>validatePublicUrl('baijiahao',bad.toString()));assert.equal(baiduPublicCandidate('baijiahao',bad.toString()),undefined);}
+ assert.throws(()=>validatePublicUrl('baijiahao','https://mbd.baidu.com.evil.test/newspage/data/landingshare?context={}'));
+});

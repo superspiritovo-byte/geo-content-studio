@@ -15,3 +15,7 @@ test('新平台只接受对应图文公开链接',()=>{
  assert.match(validatePublicUrl('xiaohongshu','https://www.xiaohongshu.com/explore/1234567890abcdef12345678'),/explore/);
  assert.throws(()=>validatePublicUrl('douyin','https://www.bilibili.com/opus/123'));
 });
+test('抖音公开文章链接可登记，短链接、后台和伪装域名仍拒绝',()=>{
+ assert.equal(validatePublicUrl('douyin','https://www.douyin.com/article/7707179220908150066'),'https://www.douyin.com/article/7707179220908150066');
+ for(const url of ['https://v.douyin.com/_R_pQYh-egs/','https://creator.douyin.com/article/123','https://www.douyin.com.evil.test/article/123','https://www.douyin.com/article/not-an-id'])assert.throws(()=>validatePublicUrl('douyin',url));
+});

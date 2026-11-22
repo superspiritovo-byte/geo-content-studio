@@ -5,11 +5,20 @@ export function normalizeIdentity(value:string){
   const u=new URL(value);u.hash='';
   const keep=['app_id','xpt','id','uk'];const params=new URLSearchParams();for(const key of keep){const v=u.searchParams.get(key);if(v)params.set(key,v);}u.search=params.toString();u.pathname=u.pathname.replace(/\/+$/,'');return u.toString().replace(/\/$/,'');
 }
+function isBaiduArticleShare(u:URL){
+ if(u.hostname!=='mbd.baidu.com'||!/^\/newspage\/data\/(?:landingshare|landingsuper)$/.test(u.pathname)||u.searchParams.getAll('context').length!==1)return false;
+ try{const context=JSON.parse(u.searchParams.get('context')||'');return !!context&&!Array.isArray(context)&&typeof context.nid==='string'&&/^news_\d{6,30}$/.test(context.nid)&&context.sourceFrom==='bjh';}catch{return false;}
+}
+export function baiduPublicCandidate(platform:Platform,value:string):string|undefined{
+ try{const u=new URL(value);if(platform!=='baijiahao'||u.protocol!=='https:'||u.username||u.password||u.port||!isBaiduArticleShare(u)||!u.searchParams.has('preview'))return;
+ u.searchParams.delete('preview');return u.toString();}catch{return;}
+}
 export function validatePublicUrl(platform:Platform,value:string){
   const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port)throw Error('只允许该平台的 HTTPS 公开文章链接');
+  if(platform==='baijiahao'&&isBaiduArticleShare(u)){if(u.searchParams.has('preview'))throw Error('该链接带有预览标记，请先打开下方去除预览参数的候选链接，核对已公开后再人工确认');return u.toString();}
   if(['xiaohongshu','douyin','bilibili'].includes(platform)){
-    const valid=platform==='xiaohongshu'?u.hostname==='www.xiaohongshu.com'&&/^\/(?:explore|discovery\/item)\/[a-f\d]{24}\/?$/i.test(u.pathname):platform==='douyin'?u.hostname==='www.douyin.com'&&/^\/note\/\d+\/?$/.test(u.pathname):u.hostname==='www.bilibili.com'&&/^\/opus\/\d+\/?$/.test(u.pathname);
-    if(!valid)throw Error('请使用该平台的完整公开图文链接，不支持短链接或后台链接');return u.toString();
+    const valid=platform==='xiaohongshu'?u.hostname==='www.xiaohongshu.com'&&/^\/(?:explore|discovery\/item)\/[a-f\d]{24}\/?$/i.test(u.pathname):platform==='douyin'?u.hostname==='www.douyin.com'&&/^\/(?:note|article)\/\d+\/?$/.test(u.pathname):u.hostname==='www.bilibili.com'&&/^\/opus\/\d+\/?$/.test(u.pathname);
+    if(!valid)throw Error('请使用该平台的完整公开作品链接（抖音支持 /note/ 和 /article/），不支持短链接或后台链接');return u.toString();
   }
   const valid=platform==='zhihu'?u.hostname==='zhuanlan.zhihu.com'&&/^\/p\/\d+\/?$/.test(u.pathname):platform==='sohu'?u.hostname==='www.sohu.com'&&/^\/a\/\d+_\d+\/?$/.test(u.pathname):['baijiahao.baidu.com','www.baijiahao.baidu.com'].includes(u.hostname)&&u.pathname==='/s'&&/^\d+$/.test(u.searchParams.get('id')||'');
   if(!valid)throw Error('请输入该平台的公开文章链接，不支持登录页或后台地址');return u.toString();

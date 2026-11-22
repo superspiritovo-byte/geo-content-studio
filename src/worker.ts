@@ -1,3 +1,5 @@
+import {browserMode,requestBrowser,interruptBrowserJobs} from './lib/browser-bridge';
+import {validateBrowserIdentity,prepareInChrome} from './lib/extension-publishing';
 import {isImagePlatform} from './lib/image-post';
 import {prepareImagePost} from './lib/image-adapters';
 import { chromium, type BrowserContext, type Locator } from 'playwright';
@@ -41,7 +43,18 @@ async function command(c:Command){
   try{
     if(c.kind==='check'){const t=db.get<Task>('tasks',c.target);if(!t)throw Error('任务不存在');await checkPublic(t,c.url);}
     else{
-      const a=db.get<Account>('accounts',c.target);if(!a)throw Error('账号不存在');const page=await pageFor(a);
+      const a=db.get<Account>('accounts',c.target);if(!a)throw Error('账号不存在');
+      if(db.tasks().some(t=>t.accountId===a.id&&t.stage==='awaiting_platform_confirmation'&&t.status==='needs_action'))throw Error('该账号有待确认草稿，请先在平台完成处理并释放账号，避免覆盖草稿');
+      if(browserMode(db)==='extension'){
+        if(c.kind==='login')await requestBrowser(db,'login',a.platform,{accountId:a.id});
+        else if(c.kind==='observe'){
+          const identity=validateBrowserIdentity(a.platform,await requestBrowser(db,'identity',a.platform,{accountId:a.id}));
+          if(a.status==='ready'&&normalizeIdentity(a.identity)!==identity.identity){db.put('accounts',{...a,status:'expired',message:'当前 Chrome 登录账号与已保存账号不符，请切换到正确账号'});throw Error('账号身份不符，未覆盖原账号');}
+          db.put<Account>('accounts',{...a,observedName:identity.name,observedIdentity:identity.identity,publishable:identity.publishable,status:a.status==='ready'?'ready':'observed',message:'已从你的 Chrome 读取身份，请核对名称后确认保存。'});
+        }
+        db.put<Command>('commands',{...c,status:'done',message:c.kind==='login'?'已在你的 Chrome 中打开或切换到平台标签页':'已从你的 Chrome 读取账号身份'});return;
+      }
+      const page=await pageFor(a);
       if(c.kind==='login'){if(db.tasks().some(t=>t.accountId===a.id&&t.stage==='awaiting_platform_confirmation'&&t.status==='needs_action'))throw Error('该账号有待确认的图文草稿，请先在平台窗口完成处理并释放账号，避免覆盖草稿');await page.goto(platforms[a.platform].home,{waitUntil:'domcontentloaded',timeout:45000});await page.bringToFront();}
       else if(c.kind==='observe'){
         const identity=await readIdentity(page,a.platform);
@@ -55,6 +68,7 @@ async function command(c:Command){
 async function publish(task:Task){
   try{
     const account=db.get<Account>('accounts',task.accountId);if(!account)throw Error('账号已移除');
+    if(browserMode(db)==='extension'){await prepareInChrome(db,task);return;}
     const page=await pageFor(account);await page.goto(platforms[account.platform].home,{waitUntil:'domcontentloaded',timeout:45000});
     const current=await readIdentity(page,account.platform);
     if(current.publishable===false)throw Error('账号身份已识别，但平台发布资格尚未确认，请先完成平台认证或审核，未提交文章');
@@ -72,6 +86,6 @@ async function publish(task:Task){
     if(publicUrl){try{await checkPublic(db.get<Task>('tasks',task.id)!,publicUrl);}catch{/* Keep submitted until public proof is available. */}}
   }catch(e){const t=db.get<Task>('tasks',task.id)!;db.setTask(task.id,'needs_action',(e instanceof Error?e.message:'发布需要人工处理')+(t.submissionAttempt?'；可能已提交，请先检查后台，禁止重复提交。':''));}
 }
-db.recoverInterrupted();
+db.recoverInterrupted();interruptBrowserJobs(db);
 const beat=setInterval(()=>db.heartbeat(),4000);db.heartbeat();console.log('GEO 本机发布助手已启动（知乎 / 百家号 / 搜狐号，适配器待真实账号验证）');
 try{while(!stopping){const c=db.claimCommand();if(c){await command(c);continue;}const task=db.claimTask();if(task){await publish(task);continue;}await new Promise(resolve=>setTimeout(resolve,1000));}}finally{clearInterval(beat);await shutdown();}

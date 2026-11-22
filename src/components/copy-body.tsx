@@ -1,13 +1,13 @@
 'use client';
 import {Copy} from 'lucide-react';
-import {markdownHTML} from '@/lib/publishing';
+import {clipboardHTML} from '@/lib/clipboard-format';
 
 export default function CopyBody({body,notify}:{body:string;notify:(message:string)=>void}){
  async function copy(){
-  const doc=new DOMParser().parseFromString(markdownHTML(body),'text/html');
+  const doc=new DOMParser().parseFromString(clipboardHTML(body),'text/html');
   doc.querySelectorAll('script,style,iframe,object,embed,form,input,button,img').forEach(el=>el.remove());
   doc.body.querySelectorAll('*').forEach(el=>{for(const attr of Array.from(el.attributes)){
-   if(attr.name.startsWith('on')||!['href','colspan','rowspan'].includes(attr.name))el.removeAttribute(attr.name);
+   if(attr.name.startsWith('on')||!['href','colspan','rowspan','style'].includes(attr.name))el.removeAttribute(attr.name);
    else if(attr.name==='href'&&!/^https?:\/\//i.test(attr.value))el.removeAttribute(attr.name);
   }});
   const html=doc.body.innerHTML;
@@ -17,11 +17,11 @@ export default function CopyBody({body,notify}:{body:string;notify:(message:stri
   const focused=document.activeElement as HTMLElement|null;
   try{
    if(navigator.clipboard?.write&&typeof ClipboardItem!=='undefined'){
-    try{await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})})]);notify('已复制带格式的正文，粘贴到平台正文区即可；标题单独填写。');return;}catch{/* Try the browser selection-based rich text copy. */}
+    try{await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([plain],{type:'text/plain'})})]);notify('已复制兼容排版的正文（小标题加粗、列表带圆点），请在平台正文区按 Ctrl+V；文章标题单独填写。');return;}catch{/* Try the browser selection-based rich text copy. */}
    }
    const range=document.createRange();range.selectNodeContents(block);selection?.removeAllRanges();selection?.addRange(range);
    if(!document.execCommand('copy'))throw Error('copy failed');
-   notify('已复制带格式的正文，粘贴到平台正文区即可；标题单独填写。');
+   notify('已复制兼容排版的正文（小标题加粗、列表带圆点），请在平台正文区按 Ctrl+V；文章标题单独填写。');
   }catch{notify('浏览器未允许带格式复制，请允许剪贴板权限后重试。');}
   finally{block.remove();selection?.removeAllRanges();if(previous)selection?.addRange(previous);focused?.focus();}
  }

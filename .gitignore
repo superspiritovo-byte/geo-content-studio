@@ -11,3 +11,8 @@ test-results/
 docs/screenshots/
 
 .next-qa/
+.next-rag-qa/
+
+.next-chrome-qa/
+
+local-data.json

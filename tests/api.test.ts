@@ -9,6 +9,7 @@ process.env.GEO_DATA_DIR=mkdtempSync(join(tmpdir(),'geo-api-'));
 const {GET,POST}=await import('../src/app/api/[...path]/route');
 const {store}=await import('../src/lib/store');
 const {encryptKey,decryptKey}=await import('../src/lib/secrets');
+store().put('config',{id:'browser-mode',mode:'isolated'});
 const context=(path:string)=>({params:Promise.resolve({path:path.split('/')})});
 async function post(path:string,data:unknown,origin='http://127.0.0.1:3000'){
   const form=data instanceof FormData;
@@ -61,6 +62,23 @@ test('连接测试接受有效的推理预算耗尽响应，但文章生成仍�
     const generated=await post('articles/generate',{title:'测试',audience:'客户',purpose:'回答问题'});assert.equal(generated.status,400);assert.match(generated.value.error,/长度上限/);
   }finally{store().saveSettings(old);await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
+test('人工确认独立记录证据、防重且不依赖助手；拒绝无确认、错误平台和处理中任务',async()=>{
+  const db=store();const a=db.createAccount('zhihu');db.confirmAccount(a.id,'人工确认作者','https://www.zhihu.com/people/manual-proof');
+  const article=db.saveArticle({title:'人工核对标题',body:'人工核对正文',audience:'客户',purpose:'介绍',checks:[]});
+  db.createBatch(article.id,[a.id],crypto.randomUUID());const t=db.tasks().find(t=>t.articleId===article.id)!;
+  const input={id:t.id,url:'https://zhuanlan.zhihu.com/p/123456',confirmed:true};
+  assert.equal((await post('tasks/confirm-publication',input)).status,400);
+  db.setTask(t.id,'needs_action','HTTP 403');
+  assert.equal((await post('tasks/confirm-publication',{...input,confirmed:false})).status,400);
+  assert.equal((await post('tasks/confirm-publication',{...input,url:'https://www.sohu.com/a/123_456'})).status,400);
+  const command=db.command('check',t.id);assert.equal((await post('tasks/confirm-publication',input)).status,400);
+  db.put('commands',{...command,status:'failed',message:'HTTP 403'});db.heartbeat('助手已停止');
+  const result=await post('tasks/confirm-publication',input);assert.equal(result.status,200);
+  const saved=db.tasks().find(x=>x.id===t.id)!;assert.equal(saved.status,'manually_confirmed');assert.equal(saved.manualConfirmation?.url,input.url);assert.ok(saved.manualConfirmation?.confirmedAt);assert.equal(saved.manualConfirmation?.previousStatus,'needs_action');assert.equal(saved.manualConfirmation?.previousMessage,'HTTP 403');assert.deepEqual(saved.snapshot,t.snapshot);
+  assert.throws(()=>db.retryTask(t.id),/不能重新提交/);assert.throws(()=>db.createBatch(article.id,[a.id],crypto.randomUUID()),/重复发布/);
+  assert.equal((await post('tasks/confirm-publication',input)).value.manualConfirmation.confirmedAt,saved.manualConfirmation?.confirmedAt);
+});
+
 after(()=>store().close());
 
 
@@ -99,4 +117,52 @@ test('回退后监测和自动运营接口关闭，保留数据库中的历史�
   assert.equal('monitor' in current,false);
   assert.equal('autoRuns' in current,false);
   assert.ok(store().db.prepare("SELECT id FROM monitor WHERE id=?").get('rollback-retained'));
+});
+
+test('RAG 接口保留旧配置，拒绝远端地址，索引失败不会创建假资料',async()=>{
+ const original=store().settings();
+ const bad=await post('rag/settings',{enabled:true,baseUrl:'https://example.com',embeddingModel:'embeddinggemma',chatModel:'qwen3:1.7b'});assert.equal(bad.status,400);
+ const save=await post('rag/settings',{enabled:true,baseUrl:'http://127.0.0.1:11434',embeddingModel:'embeddinggemma',chatModel:'qwen3:1.7b'});assert.equal(save.status,200);assert.deepEqual(store().settings(),original);
+ assert.equal((await post('rag/answer',{knowledgeId:crypto.randomUUID(),question:'什么价格'})).status,400);
+ const s=await state();assert.equal(s.rag.settings.enabled,true);assert.equal("id" in s.rag.settings,false);assert.ok(Array.isArray(s.rag.indexes));
+ await post('rag/settings',{...s.rag.settings,enabled:false});
+});
+
+test('本机 RAG 写作走本机请求并保留检索快照；设置变化不切换到在线',async()=>{
+ let endpointHits:string[]=[];
+ const server=createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;endpointHits.push(req.url||'');res.setHeader('Content-Type','application/json');if(req.url==='/api/tags'){res.end(JSON.stringify({models:[{name:'embeddinggemma:latest',digest:'local-embed'},{name:'qwen3:1.7b',digest:'local-chat'}]}));return;}
+ const payload=JSON.parse(raw);if(req.url==='/api/embed'){res.end(JSON.stringify({embeddings:payload.input.map(()=>[1,0])}));return;}
+ res.end(JSON.stringify({message:{content:JSON.stringify({title:'本机文章',body:'设备质保三个月。',checks:[]})}}));});
+ await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const addr=server.address() as {port:number};
+ try{assert.equal((await post('rag/settings',{enabled:true,baseUrl:`http://127.0.0.1:${addr.port}`,embeddingModel:'embeddinggemma',chatModel:'qwen3:1.7b'})).status,200);const knowledge=store().createKnowledge('本机写作测试','设备质保三个月。');assert.equal((await post('rag/index',{knowledgeId:knowledge.id})).status,200);const generated=await post('articles/generate',{knowledgeId:knowledge.id,title:'设备质保多久',audience:'客户',purpose:'说明质保'});assert.equal(generated.status,200);assert.equal(generated.value.retrievalSources[0].name,'粘贴资料');assert.equal(generated.value.retrievalSources[0].text,'设备质保三个月。');assert.ok(endpointHits.includes('/api/chat'));assert.ok(!endpointHits.includes('/chat/completions'));const {writingContext,writingCompletion}=await import('../src/lib/rag-writing');const context=await writingContext(store(),knowledge.id,'质保');await post('rag/settings',{...(await state()).rag.settings,enabled:false});await writingCompletion(store(),'只返回 JSON','质保',context.local);assert.equal(endpointHits.at(-1),'/api/chat');}
+ finally{await post('rag/settings',{...(await state()).rag.settings,enabled:false});await new Promise<void>(r=>server.close(()=>r()));}
+});
+
+test('本机索引失败仍保存上传资料，并返回可见错误',async()=>{
+ await post('rag/settings',{enabled:true,baseUrl:'http://127.0.0.1:1',embeddingModel:'embeddinggemma',chatModel:'qwen3:1.7b'});
+ const form=new FormData();form.set('name','索引失败保留资料');form.set('text','测试质保资料');const result=await post('knowledge/upload',form);assert.equal(result.status,200);assert.ok(result.value.indexError);assert.equal(store().get<{text:string}>('knowledge',result.value.id)?.text,'测试质保资料');
+ await post('rag/settings',{...(await state()).rag.settings,enabled:false});
+});
+
+test('Chrome 扩展 API 拒绝未配对来源，默认扩展离线不打开独立浏览器',async()=>{
+ const db=store();db.heartbeat();db.put('config',{id:'browser-mode',mode:'extension'});
+ const a=db.createAccount('zhihu');const login=await post('accounts/login',{id:a.id});assert.equal(login.status,400);assert.match(login.value.error,/扩展未连接/);
+ const pair=await post('browser/pair-code',{});assert.match(pair.value.code,/^[a-f0-9]{32}$/);assert.equal((await post('browser/extension/poll',{})).status,403);
+ const origin='chrome-extension://'+'c'.repeat(32);
+ async function extension(path:string,value:unknown,token=''){const req=new NextRequest(`http://127.0.0.1:3000/api/browser/extension/${path}`,{method:'POST',headers:{host:'127.0.0.1:3000',origin,'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(value)});const r=await POST(req,context(`browser/extension/${path}`));return{status:r.status,value:await r.json()};}
+ assert.equal((await extension('poll',{})).status,400);const connected=await extension('pair',{code:pair.value.code});assert.equal(connected.status,200);assert.ok(connected.value.token);
+ assert.equal(JSON.stringify(await state()).includes(connected.value.token),false);assert.equal((await extension('poll',{},connected.value.token)).status,200);
+ const {enqueueBrowserJob,browserJob}=await import('../src/lib/browser-bridge');const job=enqueueBrowserJob(db,'login','zhihu');assert.equal((await extension('heartbeat',{},connected.value.token)).status,200);assert.equal(browserJob(db,job.id)?.status,'queued');
+ assert.equal((await extension('asset',{id:crypto.randomUUID(),file:crypto.randomUUID()+'.png'},connected.value.token)).status,400);
+ assert.equal((await post('accounts/login',{id:a.id})).status,200);for(const c of db.all<any>('commands'))if(c.target===a.id)db.put('commands',{...c,status:'failed',message:'fixture cleanup'});
+ await post('browser/disconnect',{});db.put('config',{id:'browser-mode',mode:'isolated'});
+});
+test('抖音文章人工确认保存正确链接和快照，不创建提交指令',async()=>{
+ const db=store();const a=db.createAccount('douyin');db.confirmAccount(a.id,'测试作者','https://creator.douyin.com/account?id=12345');
+ const article=db.saveArticle({title:'抖音文章',body:'测试正文',audience:'客户',purpose:'测试',checks:[]});db.createBatch(article.id,[a.id],crypto.randomUUID(),undefined,article.revision,{images:['fixture.png'],title:'抖音文章',body:'测试正文'});const t=db.tasks().find(t=>t.articleId===article.id)!;db.setTask(t.id,'needs_action','准备超时',{stage:'awaiting_platform_confirmation',manualPublicationClaim:true});
+ const before=db.all('commands').length;const url='https://www.douyin.com/article/7707179220908150066';const result=await post('tasks/confirm-publication',{id:t.id,url,confirmed:true});assert.equal(result.status,200);assert.equal(result.value.status,'manually_confirmed');assert.equal(result.value.manualConfirmation.url,url);assert.deepEqual(result.value.snapshot,t.snapshot);assert.equal(db.all('commands').length,before);
+});
+test('百家号分享页人工确认支持合法文章标识，但拒绝直接用预览地址',async()=>{
+ const db=store();const a=db.createAccount('baijiahao');db.confirmAccount(a.id,'测试百家号作者','https://baijiahao.baidu.com/builder/rc/settings/accountSet?id=123456');const article=db.saveArticle({title:'百度分享文章',body:'测试正文',audience:'客户',purpose:'测试',checks:[]});db.createBatch(article.id,[a.id],crypto.randomUUID(),'fixture.png');const task=db.tasks().find(t=>t.articleId===article.id)!;db.setTask(task.id,'needs_action','等待人工确认');
+ const url=new URL('https://mbd.baidu.com/newspage/data/landingsuper');url.searchParams.set('context',JSON.stringify({nid:'news_10039597693489046961',sourceFrom:'bjh'}));url.searchParams.set('preview','1');const rejected=await post('tasks/confirm-publication',{id:task.id,url:url.toString(),confirmed:true});assert.equal(rejected.status,400);assert.match(rejected.value.error,/预览/);url.searchParams.delete('preview');const accepted=await post('tasks/confirm-publication',{id:task.id,url:url.toString(),confirmed:true});assert.equal(accepted.status,200);assert.equal(accepted.value.status,'manually_confirmed');assert.equal(accepted.value.publicUrl,url.toString());
 });

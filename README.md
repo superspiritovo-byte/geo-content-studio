@@ -80,3 +80,26 @@ Node.js 原生 SQLite 在当前 Node 24 中仍会打印 ExperimentalWarning，�
 ## 内容形式
 
 写作页可选择长文、FAQ、问答对和知识卡片。结构化形式允许 1—8 项，默认 FAQ 5 项、其余 3 项。保存后可导出包含标题、内容形式、正文的 JSON。
+
+## 本机向量检索与资料问答
+
+企业资料页面下方提供本机 RAG：先安装 Ollama，运行 `ollama pull embeddinggemma` 和 `ollama pull qwen3:1.7b` 下载本地模型。保存本机配置，添加资料后建立索引，再提问或查看检索片段。资料更新使旧索引失效，需重建；模型变更也需要重建。没有静默云端回退。
+
+问答始终使用本机模型。勾选并保存“选题与写作使用本机 RAG”后，选题与文章生成也使用本机检索和本机生成，不发送给已有在线接口；取消后恢复原有在线工作流，在线生成会发送所选资料。原在线配置不删除。向量与原文保存在既有 SQLite 的独立 rag_indexes 表中，按企业隔离。现阶段最多 2000 段/资料库，小规模使用内存余弦检索；相似度不是答案置信度。生成文章保留来源片段快照，手工编辑后需重新核对。
+
+Ollama 模型与接口依据：[embed API](https://docs.ollama.com/api/embed)、[EmbeddingGemma](https://ollama.com/library/embeddinggemma)、[Windows 安装](https://docs.ollama.com/windows)。下载模型需要网络，资料处理只访问本机环回地址，不允许远端地址、重定向或 cloud 型号。
+
+
+### 使用平时的 Chrome 发布
+
+默认通过 Chrome 扩展连接，不再给每个账号另开独立浏览器。
+
+1. 在「设置 → Chrome 连接」点击「打开扩展文件夹」。
+2. 在平时的 Chrome 输入 `chrome://extensions`，开启开发者模式，选择「加载已解压的扩展程序」，选择刚打开的文件夹。
+3. 在设置页生成配对码，打开 Chrome 工具栏里的「GEO 工作台 · Chrome 连接助手」，粘贴并连接。
+4. 回工作台读取身份。当前 Chrome 登录账号必须与工作台保存的账号一致。
+5. 发布时在同一个 Chrome 窗口的新标签页准备文字、格式和图片，最后由你在平台检查并提交。工作台继续保存快照与逐账号记录，支持人工确认已发布。
+
+扩展只支持默认工作台地址 `http://127.0.0.1:18080`。断线会暂停，不回退到独立浏览器。旧账号的独立登录目录保留；日常 Chrome 若未登录相应平台，需要先自行登录。更新扩展文件后在扩展管理页点重新加载。平台页面变化、跨域 iframe、验证码和额外声明需要人工处理。
+
+开发验证：`npm test`、`npm run typecheck`、`npm run build`。真实 MV3 隔离验证：先设置 `GEO_BUILD_DIR=.next-chrome-qa` 构建，再 `node --import tsx tests/chrome-extension-smoke.mjs`；需要 Playwright Chromium（`npx playwright install chromium`）。此验证使用虚拟平台页面，不代表真实平台验收。
